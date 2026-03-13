@@ -3,7 +3,7 @@ on:
   workflow_dispatch:  # 手动触发（推荐）
     inputs:
       image:
-        description: 'Docker Hub 镜像（如 nginx:latest）'
+        description: 'Docker Hub 镜像（如 nginx:latest 或 docker.io/nginx:latest）'
         required: true
       # 可选：定时自动同步（每天 0 点 UTC）
   # schedule:
@@ -20,20 +20,35 @@ jobs:
         run: |
           docker login -u "${{ secrets.ACR_USERNAME }}" -p "${{ secrets.ACR_PASSWORD }}" ${{ secrets.ACR_REGISTRY }}
 
+      - name: Process image name (remove docker.io/)
+        id: process_image
+        run: |
+          # 获取输入的镜像名并去除 docker.io/ 前缀
+          INPUT_IMAGE="${{ github.event.inputs.image }}"
+          # 如果以 docker.io/ 开头，截取后面的部分；否则保持原样
+          if [[ $INPUT_IMAGE == docker.io/* ]]; then
+            CLEAN_IMAGE="${INPUT_IMAGE#docker.io/}"
+          else
+            CLEAN_IMAGE="$INPUT_IMAGE"
+          fi
+          # 输出处理后的镜像名，供后续步骤使用
+          echo "clean_image=$CLEAN_IMAGE" >> $GITHUB_OUTPUT
+
       - name: Pull from Docker Hub
         run: |
-          docker pull ${{ github.event.inputs.image }}
+          # 使用处理后的镜像名拉取
+          docker pull ${{ steps.process_image.outputs.clean_image }}
 
       - name: Tag for Aliyun ACR
         run: |
-          SOURCE_IMAGE=${{ github.event.inputs.image }}
+          SOURCE_IMAGE=${{ steps.process_image.outputs.clean_image }}
           # 处理带 / 的镜像名（如 nginx → nginx；nacos/nacos-server → nacos_nacos-server）
           TARGET_IMAGE=$(echo $SOURCE_IMAGE | tr '/' '_')
           docker tag $SOURCE_IMAGE ${{ secrets.ACR_REGISTRY }}/${{ secrets.ACR_NAMESPACE }}/$TARGET_IMAGE
 
       - name: Push to Aliyun ACR
         run: |
-          SOURCE_IMAGE=${{ github.event.inputs.image }}
+          SOURCE_IMAGE=${{ steps.process_image.outputs.clean_image }}
           TARGET_IMAGE=$(echo $SOURCE_IMAGE | tr '/' '_')
           docker push ${{ secrets.ACR_REGISTRY }}/${{ secrets.ACR_NAMESPACE }}/$TARGET_IMAGE
 
@@ -41,4 +56,5 @@ jobs:
         run: |
           echo "✅ 同步完成！"
           echo "原镜像：${{ github.event.inputs.image }}"
-          echo "国内地址：${{ secrets.ACR_REGISTRY }}/${{ secrets.ACR_NAMESPACE }}/$(echo ${{ github.event.inputs.image }} | tr '/' '_')"
+          echo "处理后镜像：${{ steps.process_image.outputs.clean_image }}"
+          echo "国内地址：${{ secrets.ACR_REGISTRY }}/${{ secrets.ACR_NAMESPACE }}/$(echo ${{ steps.process_image.outputs.clean_image }} | tr '/' '_')"
