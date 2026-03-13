@@ -24,16 +24,14 @@ jobs:
         run: |
           # 分割镜像列表并遍历
           IFS=$' \n' read -r -a IMAGES <<< "${{ github.event.inputs.images }}"
-          
+
           # 遍历每个镜像进行同步
           for IMAGE in "${IMAGES[@]}"; do
             # 跳过空值（避免分隔符导致的空元素）
-            if [ -z "$IMAGE" ]; then
-              continue
-            fi
+            [ -z "$IMAGE" ] && continue
             
             echo "====================================="
-            echo "开始同步镜像：$IMAGE"
+            echo "开始处理镜像：$IMAGE"
             echo "====================================="
             
             # 补全 docker.io 前缀（仅无域名时）
@@ -43,15 +41,32 @@ jobs:
               IMAGE_FULL="$IMAGE"
             fi
             
+            # 提取镜像标签，判断是否为 latest
+            TAG=$(echo "$IMAGE_FULL" | awk -F ':' '{print $NF}')
+            ACR_IMAGE="${{ secrets.ACR_REGISTRY }}/${{ secrets.ACR_NAMESPACE }}/$(echo "$IMAGE_FULL" | tr '/' '_')"
+            
+            # 核心逻辑：非 latest 标签时检查ACR是否已存在该镜像
+            if [ "$TAG" != "latest" ]; then
+              echo "检查阿里云ACR中是否存在镜像：$ACR_IMAGE"
+              # 用 docker manifest inspect 检查镜像是否存在（无输出则不存在）
+              if docker manifest inspect "$ACR_IMAGE" > /dev/null 2>&1; then
+                echo "✅ 镜像 $ACR_IMAGE 已存在，跳过同步"
+                echo ""
+                continue
+              else
+                echo "🔍 镜像 $ACR_IMAGE 不存在，开始同步"
+              fi
+            else
+              echo "📌 镜像标签为 latest，直接同步（不检查是否存在）"
+            fi
+            
             # 拉取镜像
             echo "拉取镜像：$IMAGE_FULL"
             if ! docker pull "$IMAGE_FULL"; then
               echo "❌ 拉取失败，跳过该镜像"
+              echo ""
               continue
             fi
-            
-            # 生成 ACR 镜像名（仅替换 / 为 _）
-            ACR_IMAGE="${{ secrets.ACR_REGISTRY }}/${{ secrets.ACR_NAMESPACE }}/$(echo "$IMAGE_FULL" | tr '/' '_')"
             
             # 打标签并推送
             echo "打标签：$IMAGE_FULL → $ACR_IMAGE"
@@ -63,7 +78,6 @@ jobs:
             else
               echo "❌ 推送镜像 $ACR_IMAGE 失败"
             fi
-            
             echo ""
           done
           
