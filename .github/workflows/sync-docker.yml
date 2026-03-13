@@ -1,16 +1,16 @@
 name: Sync Docker Hub to Aliyun ACR
 on:
-  workflow_dispatch:  # 手动触发（推荐）
+  workflow_dispatch:  # 手动触发
     inputs:
-      image:
-        description: 'Docker Hub 镜像（如 nginx:latest 或 docker.io/nginx:latest）'
+      images:
+        description: 'Docker Hub 镜像列表（多个镜像用空格/换行分隔，如：nginx:latest docker.io/redis:6.2 nacos/nacos-server:v2.4.3）'
         required: true
       # 可选：定时自动同步（每天 0 点 UTC）
   # schedule:
   #   - cron: '0 0 * * *'
 
 jobs:
-  sync:
+  sync-multiple-images:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -20,41 +20,62 @@ jobs:
         run: |
           docker login -u "${{ secrets.ACR_USERNAME }}" -p "${{ secrets.ACR_PASSWORD }}" ${{ secrets.ACR_REGISTRY }}
 
-      - name: Process image name (remove docker.io/)
-        id: process_image
+      - name: Sync multiple images to Aliyun ACR
         run: |
-          # 获取输入的镜像名并去除 docker.io/ 前缀
-          INPUT_IMAGE="${{ github.event.inputs.image }}"
-          # 如果以 docker.io/ 开头，截取后面的部分；否则保持原样
-          if [[ $INPUT_IMAGE == docker.io/* ]]; then
-            CLEAN_IMAGE="${INPUT_IMAGE#docker.io/}"
-          else
-            CLEAN_IMAGE="$INPUT_IMAGE"
-          fi
-          # 输出处理后的镜像名，供后续步骤使用
-          echo "clean_image=$CLEAN_IMAGE" >> $GITHUB_OUTPUT
+          # 将输入的镜像列表按空格/换行分割为数组
+          IFS=$' \n' read -r -a IMAGES_ARRAY <<< "${{ github.event.inputs.images }}"
+          
+          # 遍历每个镜像进行同步
+          for IMAGE in "${IMAGES_ARRAY[@]}"; do
+            # 跳过空值（避免分隔符导致的空元素）
+            if [ -z "$IMAGE" ]; then
+              continue
+            fi
+            
+            echo "====================================="
+            echo "开始同步镜像：$IMAGE"
+            echo "====================================="
+            
+            # 步骤1：处理镜像名（移除 docker.io/ 前缀）
+            if [[ $IMAGE == docker.io/* ]]; then
+              CLEAN_IMAGE="${IMAGE#docker.io/}"
+            else
+              CLEAN_IMAGE="$IMAGE"
+            fi
+            echo "处理后的镜像名：$CLEAN_IMAGE"
+            
+            # 步骤2：拉取 Docker Hub 镜像
+            echo "开始拉取镜像：$CLEAN_IMAGE"
+            docker pull "$CLEAN_IMAGE"
+            if [ $? -ne 0 ]; then
+              echo "❌ 拉取镜像 $CLEAN_IMAGE 失败，跳过该镜像"
+              continue
+            fi
+            
+            # 步骤3：打阿里云 ACR 标签（替换 / 为 _）
+            TARGET_IMAGE=$(echo "$CLEAN_IMAGE" | tr '/' '_')
+            ACR_IMAGE="${{ secrets.ACR_REGISTRY }}/${{ secrets.ACR_NAMESPACE }}/$TARGET_IMAGE"
+            echo "打标签：$CLEAN_IMAGE → $ACR_IMAGE"
+            docker tag "$CLEAN_IMAGE" "$ACR_IMAGE"
+            
+            # 步骤4：推送到阿里云 ACR
+            echo "开始推送镜像到阿里云 ACR：$ACR_IMAGE"
+            docker push "$ACR_IMAGE"
+            if [ $? -ne 0 ]; then
+              echo "❌ 推送镜像 $ACR_IMAGE 失败"
+              continue
+            fi
+            
+            # 步骤5：输出成功信息
+            echo "✅ 镜像 $IMAGE 同步完成！国内地址：$ACR_IMAGE"
+            echo ""
+          done
+          
+          echo "====================================="
+          echo "🎉 所有镜像同步流程执行完毕！"
+          echo "====================================="
 
-      - name: Pull from Docker Hub
+      - name: Logout from Aliyun ACR
+        if: always()  # 无论前面步骤是否成功，都执行登出
         run: |
-          # 使用处理后的镜像名拉取
-          docker pull ${{ steps.process_image.outputs.clean_image }}
-
-      - name: Tag for Aliyun ACR
-        run: |
-          SOURCE_IMAGE=${{ steps.process_image.outputs.clean_image }}
-          # 处理带 / 的镜像名（如 nginx → nginx；nacos/nacos-server → nacos_nacos-server）
-          TARGET_IMAGE=$(echo $SOURCE_IMAGE | tr '/' '_')
-          docker tag $SOURCE_IMAGE ${{ secrets.ACR_REGISTRY }}/${{ secrets.ACR_NAMESPACE }}/$TARGET_IMAGE
-
-      - name: Push to Aliyun ACR
-        run: |
-          SOURCE_IMAGE=${{ steps.process_image.outputs.clean_image }}
-          TARGET_IMAGE=$(echo $SOURCE_IMAGE | tr '/' '_')
-          docker push ${{ secrets.ACR_REGISTRY }}/${{ secrets.ACR_NAMESPACE }}/$TARGET_IMAGE
-
-      - name: Show result
-        run: |
-          echo "✅ 同步完成！"
-          echo "原镜像：${{ github.event.inputs.image }}"
-          echo "处理后镜像：${{ steps.process_image.outputs.clean_image }}"
-          echo "国内地址：${{ secrets.ACR_REGISTRY }}/${{ secrets.ACR_NAMESPACE }}/$(echo ${{ steps.process_image.outputs.clean_image }} | tr '/' '_')"
+          docker logout ${{ secrets.ACR_REGISTRY }}
