@@ -1,0 +1,44 @@
+name: Sync Docker Hub to Aliyun ACR
+on:
+  workflow_dispatch:  # 手动触发（推荐）
+    inputs:
+      image:
+        description: 'Docker Hub 镜像（如 nginx:latest）'
+        required: true
+      # 可选：定时自动同步（每天 0 点 UTC）
+  # schedule:
+  #   - cron: '0 0 * * *'
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Login to Aliyun ACR
+        run: |
+          docker login -u "${{ secrets.ACR_USERNAME }}" -p "${{ secrets.ACR_PASSWORD }}" ${{ secrets.ACR_REGISTRY }}
+
+      - name: Pull from Docker Hub
+        run: |
+          docker pull ${{ github.event.inputs.image }}
+
+      - name: Tag for Aliyun ACR
+        run: |
+          SOURCE_IMAGE=${{ github.event.inputs.image }}
+          # 处理带 / 的镜像名（如 nginx → nginx；nacos/nacos-server → nacos_nacos-server）
+          TARGET_IMAGE=$(echo $SOURCE_IMAGE | tr '/' '_')
+          docker tag $SOURCE_IMAGE ${{ secrets.ACR_REGISTRY }}/${{ secrets.ACR_NAMESPACE }}/$TARGET_IMAGE
+
+      - name: Push to Aliyun ACR
+        run: |
+          SOURCE_IMAGE=${{ github.event.inputs.image }}
+          TARGET_IMAGE=$(echo $SOURCE_IMAGE | tr '/' '_')
+          docker push ${{ secrets.ACR_REGISTRY }}/${{ secrets.ACR_NAMESPACE }}/$TARGET_IMAGE
+
+      - name: Show result
+        run: |
+          echo "✅ 同步完成！"
+          echo "原镜像：${{ github.event.inputs.image }}"
+          echo "国内地址：${{ secrets.ACR_REGISTRY }}/${{ secrets.ACR_NAMESPACE }}/$(echo ${{ github.event.inputs.image }} | tr '/' '_')"
