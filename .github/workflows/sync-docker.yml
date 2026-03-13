@@ -1,9 +1,9 @@
 name: Sync Docker Hub to Aliyun ACR
 on:
-  workflow_dispatch:  # 手动触发
+  workflow_dispatch:
     inputs:
       images:
-        description: 'Docker Hub 镜像列表（多个镜像用空格/换行分隔，如：nginx:latest docker.io/redis:6.2 nacos/nacos-server:v2.4.3）'
+        description: 'Docker Hub 镜像列表（多个镜像用空格/换行分隔，如：nginx:latest docker.io/redis:6.2 quay.io/calico/apiserver:v3.31.4）'
         required: true
       # 可选：定时自动同步（每天 0 点 UTC）
   # schedule:
@@ -22,11 +22,11 @@ jobs:
 
       - name: Sync multiple images to Aliyun ACR
         run: |
-          # 将输入的镜像列表按空格/换行分割为数组
-          IFS=$' \n' read -r -a IMAGES_ARRAY <<< "${{ github.event.inputs.images }}"
+          # 分割镜像列表并遍历
+          IFS=$' \n' read -r -a IMAGES <<< "${{ github.event.inputs.images }}"
           
           # 遍历每个镜像进行同步
-          for IMAGE in "${IMAGES_ARRAY[@]}"; do
+          for IMAGE in "${IMAGES[@]}"; do
             # 跳过空值（避免分隔符导致的空元素）
             if [ -z "$IMAGE" ]; then
               continue
@@ -36,38 +36,34 @@ jobs:
             echo "开始同步镜像：$IMAGE"
             echo "====================================="
             
-            # 步骤1：处理镜像名（移除 docker.io/ 前缀）
-            if [[ $IMAGE == docker.io/* ]]; then
-              CLEAN_IMAGE="${IMAGE#docker.io/}"
+            # 补全 docker.io 前缀（仅无域名时）
+            if [[ "$IMAGE" != *.*/* && "$IMAGE" == *:* && "$IMAGE" != */* ]]; then
+              IMAGE_FULL="docker.io/$IMAGE"
             else
-              CLEAN_IMAGE="$IMAGE"
+              IMAGE_FULL="$IMAGE"
             fi
-            echo "处理后的镜像名：$CLEAN_IMAGE"
             
-            # 步骤2：拉取 Docker Hub 镜像
-            echo "开始拉取镜像：$CLEAN_IMAGE"
-            docker pull "$CLEAN_IMAGE"
-            if [ $? -ne 0 ]; then
-              echo "❌ 拉取镜像 $CLEAN_IMAGE 失败，跳过该镜像"
+            # 拉取镜像
+            echo "拉取镜像：$IMAGE_FULL"
+            if ! docker pull "$IMAGE_FULL"; then
+              echo "❌ 拉取失败，跳过该镜像"
               continue
             fi
             
-            # 步骤3：打阿里云 ACR 标签（替换 / 为 _）
-            TARGET_IMAGE=$(echo "$CLEAN_IMAGE" | tr '/' '_')
-            ACR_IMAGE="${{ secrets.ACR_REGISTRY }}/${{ secrets.ACR_NAMESPACE }}/$TARGET_IMAGE"
-            echo "打标签：$CLEAN_IMAGE → $ACR_IMAGE"
-            docker tag "$CLEAN_IMAGE" "$ACR_IMAGE"
+            # 生成 ACR 镜像名（仅替换 / 为 _）
+            ACR_IMAGE="${{ secrets.ACR_REGISTRY }}/${{ secrets.ACR_NAMESPACE }}/$(echo "$IMAGE_FULL" | tr '/' '_')"
             
-            # 步骤4：推送到阿里云 ACR
-            echo "开始推送镜像到阿里云 ACR：$ACR_IMAGE"
-            docker push "$ACR_IMAGE"
-            if [ $? -ne 0 ]; then
+            # 打标签并推送
+            echo "打标签：$IMAGE_FULL → $ACR_IMAGE"
+            docker tag "$IMAGE_FULL" "$ACR_IMAGE"
+            
+            echo "推送镜像到阿里云 ACR：$ACR_IMAGE"
+            if docker push "$ACR_IMAGE"; then
+              echo "✅ 镜像 $IMAGE 同步完成！国内地址：$ACR_IMAGE"
+            else
               echo "❌ 推送镜像 $ACR_IMAGE 失败"
-              continue
             fi
             
-            # 步骤5：输出成功信息
-            echo "✅ 镜像 $IMAGE 同步完成！国内地址：$ACR_IMAGE"
             echo ""
           done
           
