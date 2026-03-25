@@ -103,11 +103,6 @@ jobs:
             else
               echo "❌ 推送镜像 $ACR_IMAGE 失败"
             fi
-            else
-              # 使用buildx创建多平台镜像成功
-              echo "✅ 多平台镜像 $IMAGE 同步完成！国内地址：$ACR_IMAGE"
-            fi
-
             echo ""
           done
 
