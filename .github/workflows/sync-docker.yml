@@ -78,10 +78,10 @@ jobs:
             echo "拉取镜像：$IMAGE_FULL(平台: ${{ github.event.inputs.platforms }})"
 
             pull_status=false
-            # 遍历每个镜像进行同步
+            # 遍历每个平台进行同步
             for PLATFORM in "${PLATFORMS[@]}"; do
-              # 如果构建多平台失败，使用普通方式拉取并推送
-              if docker pull --platform "${PLATFORMS[0]}" "$IMAGE_FULL"; then
+              echo "拉取镜像：$IMAGE_FULL(平台: $PLATFORM)"
+              if docker pull --platform "${PLATFORM}" "$IMAGE_FULL"; then
                 pull_status=true
               fi
             done
