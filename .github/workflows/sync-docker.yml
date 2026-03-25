@@ -57,52 +57,47 @@ jobs:
 
             # 提取镜像标签，判断是否为 latest
             TAG=$(echo "$IMAGE_FULL" | awk -F ':' '{print $NF}')
-            ACR_IMAGE="${{ secrets.ACR_REGISTRY }}/${{ secrets.ACR_NAMESPACE }}/$(echo "$IMAGE_FULL" | tr '/' '_')"
 
-            # 核心逻辑：非 latest 标签时检查ACR是否已存在该镜像
-            if [ "$TAG" != "latest" ]; then
-              echo "检查阿里云ACR中是否存在镜像：$ACR_IMAGE"
-              # 用 docker manifest inspect 检查镜像是否存在（无输出则不存在）
-              if docker manifest inspect "$ACR_IMAGE" > /dev/null 2>&1; then
-                echo "✅ 镜像 $ACR_IMAGE 已存在，跳过同步"
-                echo ""
-                continue
-              else
-                echo "🔍 镜像 $ACR_IMAGE 不存在，开始同步"
-              fi
-            else
-              echo "📌 镜像标签为 latest，直接同步（不检查是否存在）"
-            fi
-
-            # 拉取镜像（指定平台）
-            echo "拉取镜像：$IMAGE_FULL(平台: ${{ github.event.inputs.platforms }})"
-
-            pull_status=false
             # 遍历每个平台进行同步
             for PLATFORM in "${PLATFORMS[@]}"; do
+
+              ACR_IMAGE="${{ secrets.ACR_REGISTRY }}/${{ secrets.ACR_NAMESPACE }}/$(echo "$IMAGE_FULL-$PLATFORM" | tr '/' '_')"
+
+              # 核心逻辑：非 latest 标签时检查ACR是否已存在该镜像
+              if [ "$TAG" != "latest" ]; then
+                echo "检查阿里云ACR中是否存在镜像：$ACR_IMAGE"
+                # 用 docker manifest inspect 检查镜像是否存在（无输出则不存在）
+                if docker manifest inspect "$ACR_IMAGE" > /dev/null 2>&1; then
+                  echo "✅ 镜像 $ACR_IMAGE 已存在，跳过同步"
+                  echo ""
+                  continue
+                else
+                  echo "🔍 镜像 $ACR_IMAGE 不存在，开始同步"
+                fi
+              else
+                echo "📌 镜像标签为 latest，直接同步（不检查是否存在）"
+              fi
+
+              # 拉取镜像（指定平台）
               echo "拉取镜像：$IMAGE_FULL(平台: $PLATFORM)"
-              if docker pull --platform "${PLATFORM}" "$IMAGE_FULL"; then
-                pull_status=true
+              if ! docker pull --platform "${PLATFORM}" "$IMAGE_FULL"; then
+                echo "❌ 拉取失败，跳过该镜像"
+                echo ""
+                continue
+              fi
+
+              # 打标签并推送
+              echo "打标签：$IMAGE_FULL → $ACR_IMAGE"
+              docker tag "$IMAGE_FULL" "$ACR_IMAGE"
+
+              echo "推送镜像到阿里云 ACR：$ACR_IMAGE"
+              if docker push "$ACR_IMAGE"; then
+                echo "✅ 镜像 $IMAGE 同步完成！国内地址：$ACR_IMAGE"
+              else
+                echo "❌ 推送镜像 $ACR_IMAGE 失败"
               fi
             done
 
-            # 如果全部拉取失败，跳过该镜像
-            if [ "$pull_status" = "false" ]; then
-              echo "❌ 拉取失败，跳过该镜像"
-              echo ""
-              continue
-            fi
-
-            # 打标签并推送
-            echo "打标签：$IMAGE_FULL → $ACR_IMAGE"
-            docker tag "$IMAGE_FULL" "$ACR_IMAGE"
-
-            echo "推送镜像到阿里云 ACR：$ACR_IMAGE"
-            if docker push "$ACR_IMAGE"; then
-              echo "✅ 镜像 $IMAGE 同步完成！国内地址：$ACR_IMAGE"
-            else
-              echo "❌ 推送镜像 $ACR_IMAGE 失败"
-            fi
             echo ""
           done
 
