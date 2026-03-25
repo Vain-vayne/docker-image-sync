@@ -8,7 +8,7 @@ on:
       platforms:
         description: '目标平台架构（多个平台用逗号分隔，如：linux/amd64,linux/arm64,linux/arm/v7）'
         required: false
-        default: 'linux/amd64'
+        default: 'linux/amd64,linux/arm64'
 
       # 可选：定时自动同步（每天 0 点 UTC）
   # schedule:
@@ -76,11 +76,18 @@ jobs:
 
             # 拉取镜像（指定平台）
             echo "拉取镜像：$IMAGE_FULL(平台: ${{ github.event.inputs.platforms }})"
-            if ! docker buildx imagetools create -t "$ACR_IMAGE" --append $(printf '--source %s ' "${PLATFORMS[@]/#/--source $IMAGE_FULL,platform="}") ; then
-              echo "❌ 构建多平台镜像失败，尝试普通拉取方式"
 
+            pull_status=false
+            # 遍历每个镜像进行同步
+            for PLATFORM in "${PLATFORMS[@]}"; do
               # 如果构建多平台失败，使用普通方式拉取并推送
-            if ! docker pull --platform "${PLATFORMS[0]}" "$IMAGE_FULL"; then
+              if docker pull --platform "${PLATFORMS[0]}" "$IMAGE_FULL"; then
+                pull_status=true
+              fi
+            done
+
+            # 如果全部拉取失败，跳过该镜像
+            if [ "$pull_status" = "false" ]; then
               echo "❌ 拉取失败，跳过该镜像"
               echo ""
               continue
@@ -95,7 +102,7 @@ jobs:
               echo "✅ 镜像 $IMAGE 同步完成！国内地址：$ACR_IMAGE"
             else
               echo "❌ 推送镜像 $ACR_IMAGE 失败"
-              fi
+            fi
             else
               # 使用buildx创建多平台镜像成功
               echo "✅ 多平台镜像 $IMAGE 同步完成！国内地址：$ACR_IMAGE"
