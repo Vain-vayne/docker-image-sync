@@ -55,8 +55,15 @@ jobs:
               IMAGE_FULL="$IMAGE"
             fi
 
-            # 提取镜像标签，判断是否为 latest
-            TAG=$(echo "$IMAGE_FULL" | awk -F ':' '{print $NF}')
+            # 判断镜像名是否包含 ":"
+            if [[ "$IMAGE_FULL" == *:* ]]; then
+              # 有冒号：正常提取 TAG
+              TAG=$(echo "$IMAGE_FULL" | awk -F ':' '{print $NF}')
+            else
+              # 无冒号：设为 latest，并修正 IMAGE_FULL
+              TAG="latest"
+              IMAGE_FULL="${IMAGE_FULL}:latest"
+            fi
 
             # 遍历每个平台进行同步
             for PLATFORM in "${PLATFORMS[@]}"; do
